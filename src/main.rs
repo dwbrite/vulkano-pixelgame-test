@@ -367,7 +367,7 @@ mod s_render {
         println!("{:?}", b);
 
         let data_buffer = CpuAccessibleBuffer::from_iter(q.device().clone(), BufferUsage::all(),
-                                                         b.map.into_iter()).expect("failed to create buffer");
+                                                         b.map.to_owned().into_iter()).expect("failed to create buffer");
 
         println!("{:?}", {
             data_buffer.read().unwrap().to_owned()
