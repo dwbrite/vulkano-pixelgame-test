@@ -103,6 +103,8 @@ impl WrappedWindow {
     pub fn poll_events(&self) {
         self.window.write().unwrap().glfw.poll_events();
     }
+
+    pub fn should_close(&self) -> bool { self.window.read().unwrap().should_close() }
 }
 
 impl From<Arc<RwLock<Window>>> for WrappedWindow {

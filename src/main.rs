@@ -62,7 +62,7 @@ const VIEW_SIZE: [u32; 2] = [240, 160];
 const INTERNAL_SIZE: [u32; 2] = [256, 176];
 
 fn main() {
-    // init vulkan :)
+    // Initialize Vulkan(o)
     let extensions = vulkano_win::required_extensions();
     let instance = Instance::new(None, &extensions, None).unwrap();
 
@@ -70,11 +70,11 @@ fn main() {
 
     let (device, queue) = get_device_with_queue(physical);
 
+    // Initialize the window + surface
     let window_stuff = WindowThing::init_window(instance.clone(), VIEW_SIZE);
     let surface = window_stuff.surface.clone();
 
-    // real shit
-    // create the swapchain and swapchain images
+    // Create the swapchain, images
     let (mut swapchain, mut images) = {
         let caps = surface
             .capabilities(physical)
@@ -101,36 +101,9 @@ fn main() {
             .expect("failed to create swapchain")
     };
 
-    // Create a vbo
-    let vertex_buffer = {
-        CpuAccessibleBuffer::from_iter(
-            device.clone(),
-            BufferUsage::all(),
-            [
-                Vertex {
-                    position: [-1.0, -1.0],
-                },
-                Vertex {
-                    position: [-1.0, 1.0],
-                },
-                Vertex {
-                    position: [1.0, -1.0],
-                },
-                Vertex {
-                    position: [1.0, 1.0],
-                },
-            ]
-                .iter()
-                .cloned(),
-        )
-            .unwrap()
-    };
-
-    // Create a dynamic viewport
+    // Create a viewport based on the swapchain image size
     let mut dynamic_state = DynamicState::none();
-
     let dimensions = images[0].dimensions();
-
     let viewport = Viewport {
         origin: [0.0, 0.0],
         dimensions: [dimensions[0] as f32, dimensions[1] as f32],
@@ -138,14 +111,27 @@ fn main() {
     };
     dynamic_state.viewports = Some(vec![viewport]);
 
+
+
+
+
+
     // Done initialization :)))))
     let mut recreate_swapchain = false;
 
     let mut previous_frame_end = Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>;
 
-    let mut s_render = s_render::new(queue.clone(), vertex_buffer.clone());
-
+    // this is literally meaningless. rename it whenever.
+    let mut s_render = s_render::new(queue.clone());
+    // why do we get this here?
     let window = surface.window();
+
+
+
+
+
+
+
     loop {
         previous_frame_end.cleanup_finished();
 
@@ -212,8 +198,6 @@ fn main() {
             }
         }
 
-        //previous_frame_end = Box::new(sync::now(device.clone())) as Box<_>;
-
         window_stuff.handle_input();
 
         if window.read().unwrap().should_close() {
@@ -228,10 +212,10 @@ mod s_render {
     use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
     use crate::{Vertex, INTERNAL_SIZE, VIEW_SIZE};
     use vulkano::framebuffer::{Subpass, RenderPassAbstract, Framebuffer};
-    use vulkano::image::{AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, Dimensions};
+    use vulkano::image::{ImageViewAccess, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, Dimensions};
     use vulkano::format::*;
     use vulkano::command_buffer::{AutoCommandBufferBuilder, AutoCommandBuffer, DynamicState};
-    use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
+    use vulkano::descriptor::descriptor_set::{PersistentDescriptorSet, FixedSizeDescriptorSet, FixedSizeDescriptorSetsPool};
     use vulkano::pipeline::viewport::Viewport;
     use vulkano::buffer::{CpuAccessibleBuffer, BufferUsage};
     use vulkano::sync::GpuFuture;
@@ -242,34 +226,46 @@ mod s_render {
     use vulkano::pipeline::blend::{AttachmentBlend};
     use crate::area::Area;
 
+    struct BootyBuffer {
+        texture: Arc<dyn ImageViewAccess + Send + Sync>,
+        sampler: Arc<Sampler>,
+    }
+
     pub struct RenderThing {
         q: Arc<Queue>,
         render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
         pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
         fbi: Arc<AttachmentImage>,
         vbo: Arc<CpuAccessibleBuffer<[Vertex]>>,
-        set: Arc<dyn DescriptorSet + Send + Sync>,
+        pool: FixedSizeDescriptorSetsPool<Arc<dyn GraphicsPipelineAbstract + Send + Sync>>,
         ticks: u64,
+        bbuf: BootyBuffer,
+        camera: (i32, i32),
+        forward: bool,
     }
 
-    pub fn new(q: Arc<Queue>, vbo: Arc<CpuAccessibleBuffer<[Vertex]>>) -> RenderThing {
-        let render_pass = Arc::new(
-            vulkano::single_pass_renderpass!(
-                q.device().clone(),
-                attachments: {
-                    output: {
-                        load: Clear,
-                        store: Store,
-                        format: Format::R8G8B8A8Unorm,
-                        samples: 1,
+    pub fn new(q: Arc<Queue>) -> RenderThing {
+        // Creates a
+
+        let render_pass = {
+            Arc::new(
+                vulkano::single_pass_renderpass!(
+                    q.device().clone(),
+                    attachments: {
+                        output: {
+                            load: Clear,
+                            store: Store,
+                            format: Format::R8G8B8A8Unorm,
+                            samples: 1,
+                        }
+                    },
+                    pass: {
+                        color: [output],
+                        depth_stencil: {}
                     }
-                },
-                pass: {
-                    color: [output],
-                    depth_stencil: {}
-                }
-            ).unwrap(),
-        );
+                ).unwrap(),
+            )
+        };
 
         let pipeline = {
             let vs = vs::Shader::load(q.device().clone()).unwrap();
@@ -289,105 +285,80 @@ mod s_render {
             )
         };
 
-        let img = AttachmentImage::with_usage(
-            q.device().clone(),
-            INTERNAL_SIZE,
-            Format::R8G8B8A8Unorm,
-            ImageUsage {
-                transfer_source: true,
-                color_attachment: true,
-                ..ImageUsage::none()
-            }
-        ).unwrap();
-
-        let (texture, tex_future) = {
-            let image = image::load_from_memory_with_format(include_bytes!("../res/tiles.png"),
-                                                            ImageFormat::PNG).unwrap().to_rgba();
-            let image_data = image.into_raw().clone();
-
-            ImmutableImage::from_iter(
-                image_data.iter().cloned(),
-                Dimensions::Dim2d { width: 1024, height: 1024 },
-                Format::R8G8B8A8Srgb,
-                q.clone()
+        let img = {
+            AttachmentImage::with_usage(
+                q.device().clone(),
+                INTERNAL_SIZE,
+                Format::R8G8B8A8Unorm,
+                ImageUsage {
+                    transfer_source: true,
+                    color_attachment: true,
+                    ..ImageUsage::none()
+                }
             ).unwrap()
         };
 
-        //tex_future.cleanup_finished();
-        match tex_future.then_signal_fence_and_flush() {
-            Ok(_) => println!("loaded image"),
-            Err(_) => println!("shit's fucked")
-        }
+        let vbo = {
+            CpuAccessibleBuffer::from_iter(
+                q.device().clone(),
+                BufferUsage::all(),
+                [
+                    Vertex { position: [-1.0, -1.0] },
+                    Vertex { position: [-1.0, 1.0] },
+                    Vertex { position: [1.0, -1.0] },
+                    Vertex { position: [1.0, 1.0] },
+                ].iter().cloned(),
+            ).unwrap()
+        };
 
-        let sampler = Sampler::unnormalized(
-            q.device().clone(),
-            Filter::Nearest,
-            UnnormalizedSamplerAddressMode::ClampToEdge,
-            UnnormalizedSamplerAddressMode::ClampToEdge
-        ).unwrap();
+        let pool : FixedSizeDescriptorSetsPool<Arc<dyn GraphicsPipelineAbstract + Send + Sync>> = FixedSizeDescriptorSetsPool::new(pipeline.clone(), 0);
 
+        let bbuf = {
+            let (texture, tex_future) = {
+                let image = image::load_from_memory_with_format(include_bytes!("../res/tiles.png"),
+                                                                ImageFormat::PNG).unwrap().to_rgba();
+                let image_data = image.into_raw().clone();
 
+                ImmutableImage::from_iter(
+                    image_data.iter().cloned(),
+                    Dimensions::Dim2d { width: 1024, height: 1024 },
+                    Format::R8G8B8A8Srgb,
+                    q.clone()
+                ).unwrap()
+            };
 
+            //tex_future.cleanup_finished();
+            match tex_future.then_signal_fence_and_flush() {
+                Ok(_) => println!("loaded image"),
+                Err(_) => println!("shit's fucked")
+            }
 
+            let sampler = {
+                Sampler::unnormalized(
+                    q.device().clone(),
+                    Filter::Nearest,
+                    UnnormalizedSamplerAddressMode::ClampToEdge,
+                    UnnormalizedSamplerAddressMode::ClampToEdge
+                ).unwrap()
+            };
 
-
-        let mut _t = Area::from(
-            vec![
-                vec![4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                vec![1, 1, 2, 1, 1, 4, 4, 1, 2, 3,139, 5, 2, 2, 1, 5, 2, 1, 5, 1],
-                vec![2, 3, 1, 5, 4, 1, 3, 3, 3, 1, 5, 5, 1, 3, 4, 5, 2, 1, 5, 2],
-                vec![3, 3, 3, 2, 4, 1, 3, 3, 2, 2, 2, 3, 5, 4, 2, 3, 2, 2, 1, 4],
-                vec![4, 3, 2, 4, 1, 3, 1, 2, 5, 3, 5, 5, 4, 1, 5, 2, 5, 1, 4, 3],
-                vec![5, 5, 5, 1, 5, 3, 2, 3, 5, 5, 3, 5, 1, 4, 2, 1, 4, 4, 4, 5],
-                vec![2, 2, 5, 3, 3, 4, 5, 5, 2, 3, 2, 4, 1, 2, 2, 3, 1, 2, 3, 2],
-                vec![5, 1, 4, 3, 4, 4, 3, 4, 4, 1, 5, 3, 3, 4, 1, 4, 4, 5, 1, 2],
-                vec![1, 5, 1, 3, 4, 2, 1, 1, 5, 5, 3, 2, 4, 4, 1, 4, 4, 1, 1, 1],
-                vec![2, 3, 5, 2, 2, 2, 2, 4, 1, 2, 5, 5, 4, 1, 5, 3, 2, 2, 3, 4],
-                vec![4, 4, 3, 1, 1, 2, 2, 3, 4, 3, 5, 3, 2, 3, 1, 3, 2, 5, 2, 5],
-                vec![5, 3, 2, 4, 5, 1, 1, 1, 4, 4, 5, 5, 4, 2, 1, 4, 3, 1, 1, 4],
-                vec![4, 2, 4, 3, 2, 2, 4, 3, 3, 5, 3, 1, 5, 1, 4, 5, 4, 5, 3, 2],
-                vec![5, 4, 4, 2, 1, 3, 1, 1, 2, 2, 1, 1, 5, 4, 2, 3, 1, 5, 3, 1],
-                vec![5, 1, 3, 5, 3, 3, 2, 4, 2, 3, 2, 5, 4, 5, 1, 5, 3, 3, 1, 3],
-                vec![3, 2, 4, 5, 5, 4, 5, 5, 5, 2, 3, 5, 2, 4, 5, 2, 4, 3, 2, 5],
-                vec![1, 3, 3, 2, 1, 2, 1, 3, 1, 3, 1, 4, 1, 3, 5, 4, 2, 3, 1, 3],
-                vec![4, 4, 3, 3, 4, 1, 3, 3, 5, 4, 4, 3, 3, 5, 4, 1, 5, 1, 4, 5],
-                vec![1, 4, 2, 1, 3, 1, 4, 2, 2, 2, 2, 5, 4, 3, 4, 1, 3, 2, 1, 2],
-                vec![3, 4, 4, 3, 5, 4, 3, 2, 1, 3, 4, 5, 5, 5, 5, 4, 1, 3, 4, 3]
-            ]
-        );
-
-        _t.set_tile(2, 1, 0);
-
-        let mut b = _t.view_slice(2..18, 11..22);
-        b.set_tile(0, 0, 0);
-        b.set_tile(1, 2, 0);
-
-        println!("{:?}", serde_json::to_string(&b).unwrap());
-
-        println!("{:?}", b);
-
-        let data_buffer = CpuAccessibleBuffer::from_iter(q.device().clone(), BufferUsage::all(),
-                                                         b.map.to_owned().into_iter()).expect("failed to create buffer");
-
-        println!("{:?}", {
-            data_buffer.read().unwrap().to_owned()
-        });
-
-
-        let set = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
-            .add_sampled_image(texture.clone(), sampler.clone()).unwrap()
-            .add_buffer(data_buffer.clone()).unwrap()
-            .build().unwrap()
-        );
+            BootyBuffer {
+                texture,
+                sampler
+            }
+        };
 
         RenderThing {
             q,
             render_pass,
+            pool,
             pipeline,
             fbi: img,
             vbo,
-            set,
-            ticks: 0
+            ticks: 0,
+            bbuf,
+            camera: (0, 0),
+            forward: true
         }
     }
 
@@ -395,10 +366,72 @@ mod s_render {
         pub fn frame<D>(&mut self, swap_img: D) -> AutoCommandBuffer<StandardCommandPoolAlloc>
             where D: ImageAccess + Send + Sync + 'static,
         {
-            self.ticks += 1;
-            let offset = ((self.ticks/5)%16) as i32;
 
-            println!("ticks: {}", self.ticks);
+            self.ticks += 1;
+            let mut offset = ((self.ticks/10)%16) as i32;
+
+            if !self.forward {
+                offset = 16 - offset;
+            }
+
+            let set = {
+
+                let (w, h) = (20, 20);
+
+                if self.ticks % (16*10) == 0 {
+                    let n = if !self.forward { -1 } else { 1 };
+                    self.camera.0 += n;
+                    self.camera.1 += n;
+                }
+
+                if self.camera.0 + 16 >= w {
+                    self.forward = false;
+                } else if self.camera.0 < 0 {
+                    self.forward = true;
+                }
+
+
+                let data_buffer = {
+                    let mut _t = Area::from(
+                        vec![
+                            vec![4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                            vec![1, 1, 2, 1, 1, 4, 4, 1, 2, 3,139, 5, 2, 2, 1, 5, 2, 1, 5, 1],
+                            vec![2, 3, 1, 5, 4, 1, 3, 3, 3, 1, 5, 5, 1, 3, 4, 5, 2, 1, 5, 2],
+                            vec![3, 3, 3, 2, 4, 1, 3, 3, 2, 2, 2, 3, 5, 4, 2, 3, 2, 2, 1, 4],
+                            vec![4, 3, 2, 4, 1, 3, 1, 2, 5, 3, 5, 5, 4, 1, 5, 2, 5, 1, 4, 3],
+                            vec![5, 5, 5, 1, 5, 3, 2, 3, 5, 5, 3, 5, 1, 4, 2, 1, 4, 4, 4, 5],
+                            vec![2, 2, 5, 3, 3, 4, 5, 5, 2, 3, 2, 4, 1, 2, 2, 3, 1, 2, 3, 2],
+                            vec![5, 1, 4, 3, 4, 4, 3, 4, 4, 1, 5, 3, 3, 4, 1, 4, 4, 5, 1, 2],
+                            vec![1, 5, 1, 3, 4, 2, 1, 1, 5, 5, 3, 2, 4, 4, 1, 4, 4, 1, 1, 1],
+                            vec![2, 3, 5, 2, 2, 2, 2, 4, 1, 2, 5, 5, 4, 1, 5, 3, 2, 2, 3, 4],
+                            vec![4, 4, 3, 1, 1, 2, 2, 3, 4, 3, 5, 3, 2, 3, 1, 3, 2, 5, 2, 5],
+                            vec![5, 3, 2, 4, 5, 1, 1, 1, 4, 4, 5, 5, 4, 2, 1, 4, 3, 1, 1, 4],
+                            vec![4, 2, 4, 3, 2, 2, 4, 3, 3, 5, 3, 1, 5, 1, 4, 5, 4, 5, 3, 2],
+                            vec![5, 4, 4, 2, 1, 3, 1, 1, 2, 2, 1, 1, 5, 4, 2, 3, 1, 5, 3, 1],
+                            vec![5, 1, 3, 5, 3, 3, 2, 4, 2, 3, 2, 5, 4, 5, 1, 5, 3, 3, 1, 3],
+                            vec![3, 2, 4, 5, 5, 4, 5, 5, 5, 2, 3, 5, 2, 4, 5, 2, 4, 3, 2, 5],
+                            vec![1, 3, 3, 2, 1, 2, 1, 3, 1, 3, 1, 4, 1, 3, 5, 4, 2, 3, 1, 3],
+                            vec![4, 4, 3, 3, 4, 1, 3, 3, 5, 4, 4, 3, 3, 5, 4, 1, 5, 1, 4, 5],
+                            vec![1, 4, 2, 1, 3, 1, 4, 2, 2, 2, 2, 5, 4, 3, 4, 1, 3, 2, 1, 2],
+                            vec![3, 4, 4, 3, 5, 4, 3, 2, 1, 3, 4, 5, 5, 5, 5, 4, 1, 3, 4, 3]
+                        ]
+                    );
+
+                    _t.set_tile(2, 1, 0);
+
+                    let mut b = _t.view_slice(self.camera.0 as usize..(self.camera.0+16) as usize, self.camera.1 as usize..(self.camera.1+11) as usize);
+
+                    CpuAccessibleBuffer::from_iter(self.q.device().clone(), BufferUsage::all(),
+                                                   b.map.to_owned().into_iter()).expect("failed to create buffer")
+                };
+
+
+                self.pool.next()
+                    .add_sampled_image(self.bbuf.texture.clone(), self.bbuf.sampler.clone()).unwrap()
+                    .add_buffer(data_buffer.clone()).unwrap()
+                    .build().unwrap()
+            };
+
             let framebuffer = Arc::new(
                 Framebuffer::start(self.render_pass.clone())
                     .add(self.fbi.clone()).expect("attach fbi failed")
@@ -443,7 +476,7 @@ mod s_render {
                         ..DynamicState::none()
                     },
                     vec![self.vbo.clone()],
-                    self.set.clone(),
+                    set,
                     (),
                 )
                 .unwrap()
@@ -519,4 +552,66 @@ void main() {
         }
     }
 }
+
+mod server {
+    use std::collections::HashMap;
+    use crate::area::Area;
+    use std::rc::Rc;
+    use actix::*;
+    use crate::common::Ping;
+    use std::time::Duration;
+
+    struct Game {
+        areas: HashMap<String, Rc<Area>>,
+        live_areas: Vec<String>,
+        clients: HashMap<usize, ClientAreas>,
+        counter: usize,
+        addr: Recipient<Ping>
+    }
+
+    impl Actor for Game {
+        type Context = Context<Game>;
+    }
+
+    impl Handler<Ping> for Game {
+        type Result = ();
+
+        fn handle(&mut self, msg: Ping, ctx: &mut Context<Self>) {
+            self.counter += 1;
+            if self.counter > 10 {
+                System::current().stop();
+            } else {
+                println!("Ping received {:?}", msg.id);
+
+                // wait 100ns
+                ctx.run_later(Duration::new(0, 100), move |act, _| {
+                    act.addr.do_send(Ping{id: msg.id + 1});
+                });
+            }
+        }
+    }
+
+    // TODO: set_areas()
+    // TODO: keepalive()
+    struct ClientAreas {
+        areas: Vec<String>,
+        keepalive_tick: u64
+    }
+}
+
+mod common {
+    use actix::*;
+
+    #[derive(Message)]
+    pub struct Ping { pub id: usize }
+}
+
+mod client {
+    use actix::*;
+
+    mod camera {
+
+    }
+}
+
 
