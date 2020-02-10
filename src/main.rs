@@ -25,7 +25,7 @@ pub mod window;
 pub mod vg;
 pub mod area;
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct Vertex {
     position: [f32; 2],
 }
@@ -70,15 +70,21 @@ fn main() {
 
     let (device, queue) = get_device_with_queue(physical);
 
+
+
     // Initialize the window + surface
     let window_stuff = WindowThing::init_window(instance.clone(), VIEW_SIZE);
     let surface = window_stuff.surface.clone();
+
+
 
     // Create the swapchain, images
     let (mut swapchain, mut images) = {
         let caps = surface
             .capabilities(physical)
             .expect("failed to get surface capabilities");
+
+        println!("{:?}", caps);
 
         let alpha = caps.supported_composite_alpha.iter().next().unwrap();
         let format = caps.supported_formats[0].0;
@@ -100,6 +106,8 @@ fn main() {
         )
             .expect("failed to create swapchain")
     };
+
+
 
     // Create a viewport based on the swapchain image size
     let mut dynamic_state = DynamicState::none();
@@ -212,7 +220,7 @@ mod s_render {
     use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
     use crate::{Vertex, INTERNAL_SIZE, VIEW_SIZE};
     use vulkano::framebuffer::{Subpass, RenderPassAbstract, Framebuffer};
-    use vulkano::image::{ImageViewAccess, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, Dimensions};
+    use vulkano::image::{ImageViewAccess, AttachmentImage, ImageAccess, ImageUsage, ImmutableImage, Dimensions, SwapchainImage};
     use vulkano::format::*;
     use vulkano::command_buffer::{AutoCommandBufferBuilder, AutoCommandBuffer, DynamicState};
     use vulkano::descriptor::descriptor_set::{PersistentDescriptorSet, FixedSizeDescriptorSet, FixedSizeDescriptorSetsPool};
@@ -225,6 +233,7 @@ mod s_render {
     use vulkano::descriptor::{DescriptorSet};
     use vulkano::pipeline::blend::{AttachmentBlend};
     use crate::area::Area;
+    use crate::vg::WrappedWindow;
 
     struct BootyBuffer {
         texture: Arc<dyn ImageViewAccess + Send + Sync>,
@@ -363,9 +372,10 @@ mod s_render {
     }
 
     impl RenderThing {
-        pub fn frame<D>(&mut self, swap_img: D) -> AutoCommandBuffer<StandardCommandPoolAlloc>
-            where D: ImageAccess + Send + Sync + 'static,
+        pub fn frame(&mut self, _swap_img: Arc<SwapchainImage<WrappedWindow>>) -> AutoCommandBuffer<StandardCommandPoolAlloc>
         {
+            let swap_img1 = Box::new(_swap_img.clone()) as Box<ImageAccess + Send + Sync>;
+            let swap_img2 = Box::new(_swap_img.clone()) as Box<ImageAccess + Send + Sync>;
 
             self.ticks += 1;
             let mut offset = ((self.ticks/10)%16) as i32;
@@ -440,7 +450,7 @@ mod s_render {
 
             let (dtl, dbr) = {
                 let (w1, h1) = (240i32, 160i32);
-                let (w2, h2) = (swap_img.dimensions().width() as i32, swap_img.dimensions().height() as i32);
+                let (w2, h2) = (swap_img2.dimensions().width() as i32, swap_img2.dimensions().height() as i32);
 
                 let x_scale = w2 / w1;
                 let y_scale = h2 / h1;
@@ -482,12 +492,14 @@ mod s_render {
                 .unwrap()
                 .end_render_pass()
                 .unwrap()
+                .clear_color_image(swap_img1, ClearValue::Int([0,0,0,1]))
+                .unwrap()
                 .blit_image(
                     self.fbi.clone(),
                     [offset, offset, 0],
                     [VIEW_SIZE[0] as i32 + offset, VIEW_SIZE[1] as i32 + offset, 1],
                     0, 0,
-                    swap_img,
+                    swap_img2,
                     dtl,
                     dbr,
                     0, 0, 1,

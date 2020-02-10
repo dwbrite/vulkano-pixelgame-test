@@ -1,10 +1,12 @@
 use crate::vg;
 use crate::vg::*;
-use glfw::{Action, ClientApiHint, Key, WindowEvent, WindowHint, WindowMode};
+use glfw::{Action, ClientApiHint, Key, WindowEvent, WindowHint, WindowMode, Context};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc};
 use vulkano::instance::Instance;
 use vulkano::swapchain::Surface;
+use image::{DynamicImage, imageops};
+use std::ops::Deref;
 
 pub struct WindowThing {
     pub events: Receiver<(f64, WindowEvent)>,
@@ -39,6 +41,15 @@ impl WindowThing {
             mut_window.set_scroll_polling(true);
             mut_window.set_char_polling(true);
             mut_window.set_size_limits(dimensions[0], dimensions[1], std::u32::MAX, std::u32::MAX);
+
+            if let DynamicImage::ImageRgba8(icon) = image::open("res/master16.png").unwrap() {
+                //Set the icon to be multiple sizes of the same icon to account for scaling
+                mut_window.set_icon(vec![
+                    imageops::resize(&icon, 16, 16, image::imageops::Nearest),
+                    imageops::resize(&icon, 32, 32, image::imageops::Nearest),
+                    imageops::resize(&icon, 48, 48, image::imageops::Nearest)
+                ]);
+            }
         }
 
         WindowThing {
