@@ -1,4 +1,4 @@
-# Pokemon Gen 3 Clone
+# Testing pixel-art rendering with Vulkano + GLSL
 
 See current progress at 
 
